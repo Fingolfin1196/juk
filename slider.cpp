@@ -291,7 +291,7 @@ TimeSlider::TimeSlider( QWidget *parent )
     : Slider( Qt::Horizontal, 0, parent )
     , m_knobX( 0.0 )
 {
-    m_usingCustomStyle = true;
+    m_usingCustomStyle = false;
     setFocusPolicy( Qt::NoFocus );
 }
 
@@ -302,13 +302,18 @@ TimeSlider::setSliderValue( int value )
 }
 
 void
-TimeSlider::paintEvent( QPaintEvent *pe )
+TimeSlider::paintEvent( QPaintEvent *event )
 {
-    QPainter p( this );
-    p.setClipRegion( pe->region() );
-    paintCustomSlider( &p );
-    p.end();
+    if( m_usingCustomStyle )
+    {
+        QPainter p( this );
+        p.setClipRegion( event->region() );
+        paintCustomSlider( &p );
+        p.end();
+        return;
+    }
 
+    QSlider::paintEvent( event );
 }
 
 void TimeSlider::sliderChange( SliderChange change )
