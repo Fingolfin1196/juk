@@ -124,13 +124,7 @@ Playlist::Playlist(
     , m_playlistName(name)
     , m_fetcher(new WebImageFetcher(this))
 {
-    // Any added columns must precede normal ones, which are normally added
-    // in setup()
-    for(int i = 0; i < extraCols; ++i) {
-        addColumn(i18n("JuK")); // Placeholder text
-    }
-
-    setup();
+    setup(extraCols);
 
     // Some subclasses need to do even more handling but will remember to
     // call setupPlaylist
@@ -157,8 +151,13 @@ Playlist::Playlist(PlaylistCollection *collection, const QFileInfo &playlistFile
     : Playlist(true, QString(), collection, iconName, 0)
 {
     m_fileName = playlistFile.canonicalFilePath();
-    loadFile(m_fileName, playlistFile);
-    collection->setupPlaylist(this, iconName);
+
+    // Load the file after construction completes so that virtual methods in
+    // subclasses can take effect.
+    QTimer::singleShot(0, [=]() {
+        loadFile(m_fileName, playlistFile);
+        collection->setupPlaylist(this, iconName);
+    });
 }
 
 Playlist::Playlist(PlaylistCollection *collection, bool delaySetup, int extraColumns)
@@ -170,8 +169,12 @@ Playlist::~Playlist()
 {
     // clearItem() will take care of removing the items from the history,
     // so call clearItems() to make sure it happens.
+    //
+    // Some subclasses override clearItems and items so we manually dispatch to
+    // make clear that it's intentional that those subclassed versions don't
+    // get called (because we can't call them)
 
-    clearItems(items());
+    Playlist::clearItems(Playlist::items());
 
     if(!m_shuttingDown)
         m_collection->removePlaylist(this);
@@ -298,7 +301,6 @@ void Playlist::saveAs()
 void Playlist::updateDeletedItem(PlaylistItem *item)
 {
     m_members.remove(item->file().absFilePath());
-    m_search.clearItem(item);
 
     m_history.removeAll(item);
 }
@@ -364,23 +366,24 @@ void Playlist::updateLeftColumn()
     }
 }
 
-void Playlist::setItemsVisible(const PlaylistItemList &items, bool visible) // static
+void Playlist::setItemsVisible(const QModelIndexList &indexes, bool visible) // static
 {
     m_visibleChanged = true;
 
-    foreach(PlaylistItem *playlistItem, items)
-        playlistItem->setHidden(!visible);
+    for(QModelIndex index : indexes)
+        itemFromIndex(index)->setHidden(!visible);
 }
 
-void Playlist::setSearch(const PlaylistSearch &s)
+void Playlist::setSearch(PlaylistSearch* s)
 {
     m_search = s;
 
     if(!m_searchEnabled)
         return;
 
-    setItemsVisible(s.matchedItems(), true);
-    setItemsVisible(s.unmatchedItems(), false);
+    for(int row = 0; row < topLevelItemCount(); ++row)
+        topLevelItem(row)->setHidden(true);
+    setItemsVisible(s->matchedItems(), true);
 
     TrackSequenceManager::instance()->iterator()->playlistChanged();
 }
@@ -393,32 +396,39 @@ void Playlist::setSearchEnabled(bool enabled)
     m_searchEnabled = enabled;
 
     if(enabled) {
-        setItemsVisible(m_search.matchedItems(), true);
-        setItemsVisible(m_search.unmatchedItems(), false);
+        for(int row = 0; row < topLevelItemCount(); ++row)
+            topLevelItem(row)->setHidden(true);
+        setItemsVisible(m_search->matchedItems(), true);
     }
     else
-        setItemsVisible(items(), true);
+        for(PlaylistItem* item : items())
+            item->setHidden(false);
+
 }
 
 // Mostly seems to be for DynamicPlaylist
 // TODO: See if this can't all be eliminated by making 'is-playing' a predicate
 // of the playlist item itself
-void Playlist::synchronizePlayingItems(const PlaylistList &sources, bool setMaster)
+void Playlist::synchronizePlayingItems(Playlist *playlist, bool setMaster)
 {
-    foreach(const Playlist *p, sources) {
-        if(p->playing()) {
-            CollectionListItem *base = playingItem()->collectionItem();
-            for(QTreeWidgetItemIterator itemIt(this); *itemIt; ++itemIt) {
-                PlaylistItem *item = static_cast<PlaylistItem *>(*itemIt);
-                if(base == item->collectionItem()) {
-                    item->setPlaying(true, setMaster);
-                    PlaylistItemList playing = PlaylistItem::playingItems();
-                    TrackSequenceManager::instance()->setCurrent(item);
-                    return;
-                }
-            }
+    if(!playlist || !playlist->playing())
+        return;
+
+    CollectionListItem *base = playingItem()->collectionItem();
+    for(QTreeWidgetItemIterator itemIt(playlist); *itemIt; ++itemIt) {
+        PlaylistItem *item = static_cast<PlaylistItem *>(*itemIt);
+        if(base == item->collectionItem()) {
+            item->setPlaying(true, setMaster);
+            TrackSequenceManager::instance()->setCurrent(item);
             return;
         }
+    }
+}
+
+void Playlist::synchronizePlayingItems(const PlaylistList &sources, bool setMaster)
+{
+    for(auto p : sources) {
+        synchronizePlayingItems(p, setMaster);
     }
 }
 
@@ -787,14 +797,18 @@ bool Playlist::eventFilter(QObject *watched, QEvent *e)
 void Playlist::keyPressEvent(QKeyEvent *event)
 {
     if(event->key() == Qt::Key_Up) {
-        const auto topItem = topLevelItem(0);
-        if(topItem && topItem == currentItem()) {
+        if(const auto activeItem = currentItem()) {
             QTreeWidgetItemIterator visible(this, QTreeWidgetItemIterator::NotHidden);
-            if(topItem == *visible) {
+            if(activeItem == *visible) {
                 emit signalMoveFocusAway();
                 event->accept();
             }
         }
+    }
+    else if(event->key() == Qt::Key_Return && !event->isAutoRepeat()) {
+        event->accept();
+        slotPlayCurrent();
+        return; // event completely handled already
     }
 
     QTreeWidget::keyPressEvent(event);
@@ -1003,12 +1017,6 @@ void Playlist::takeItem(QTreeWidgetItem *item)
     QTreeWidget::takeTopLevelItem(index);
 }
 
-void Playlist::addColumn(const QString &label, int)
-{
-    m_columns.append(label);
-    setHeaderLabels(m_columns);
-}
-
 PlaylistItem *Playlist::createItem(const FileHandle &file, QTreeWidgetItem *after)
 {
     return createItem<PlaylistItem>(file, after);
@@ -1112,10 +1120,10 @@ void Playlist::refreshAlbum(const QString &artist, const QString &album)
     playlists.append(CollectionList::instance());
 
     PlaylistSearch search(playlists, components);
-    const PlaylistItemList matches = search.matchedItems();
+    const QModelIndexList matches = search.matchedItems();
 
-    foreach(PlaylistItem *item, matches)
-        item->refresh();
+    for(QModelIndex index: matches)
+        static_cast<PlaylistItem*>(itemFromIndex(index))->refresh();
 }
 
 void Playlist::hideColumn(int c, bool updateSearch)
@@ -1192,26 +1200,46 @@ void Playlist::sortByColumn(int column, Qt::SortOrder order)
     QTreeWidget::sortByColumn(column, order);
 }
 
-void Playlist::slotInitialize()
+// This function is called during startup so it cannot rely on any virtual
+// functions that might be changed by a subclass (virtual functions relying on
+// superclasses are fine since the C++ runtime can statically dispatch those).
+void Playlist::slotInitialize(int numColumnsToReserve)
 {
-    addColumn(i18n("Track Name"));
-    addColumn(i18n("Artist"));
-    addColumn(i18n("Album"));
-    addColumn(i18n("Cover"));
-    addColumn(i18nc("cd track number", "Track"));
-    addColumn(i18n("Genre"));
-    addColumn(i18n("Year"));
-    addColumn(i18n("Length"));
-    addColumn(i18n("Bitrate"));
-    addColumn(i18n("Comment"));
-    addColumn(i18n("File Name"));
-    addColumn(i18n("File Name (full path)"));
+    // Setup the columns in the list view. We set aside room for
+    // subclass-specific extra columns (always added at the beginning, see
+    // columnOffset()) and then supplement with columns that apply to every
+    // playlist.
+    const QStringList standardColHeaders = {
+        i18n("Track Name"),
+        i18n("Artist"),
+        i18n("Album"),
+        i18n("Cover"),
+        i18nc("cd track number", "Track"),
+        i18n("Genre"),
+        i18n("Year"),
+        i18n("Length"),
+        i18n("Bitrate"),
+        i18n("Comment"),
+        i18n("File Name"),
+        i18n("File Name (full path)"),
+    };
 
+    QStringList allColHeaders;
+    allColHeaders.reserve(numColumnsToReserve + standardColHeaders.size());
+    std::fill_n(allColHeaders.begin(), numColumnsToReserve, i18n("JuK"));
+    std::copy  (standardColHeaders.cbegin(), standardColHeaders.cend(),
+            std::back_inserter(allColHeaders));
+
+    setHeaderLabels(allColHeaders);
     setAllColumnsShowFocus(true);
     setSelectionMode(QTreeWidget::ExtendedSelection);
     header()->setSortIndicatorShown(true);
 
-    m_columnFixedWidths.resize(columnCount());
+    int numColumns = columnCount();
+
+    m_columnFixedWidths.resize(numColumns);
+    m_weightDirty.resize(numColumns);
+    m_columnWeights.resize(numColumns);
 
     //////////////////////////////////////////////////
     // setup header RMB menu
@@ -1220,11 +1248,8 @@ void Playlist::slotInitialize()
     QAction *showAction;
     const auto sharedSettings = SharedSettings::instance();
 
-    for(int i = 0; i < header()->count(); ++i) {
-        if(i - columnOffset() == PlaylistItem::FileNameColumn)
-            m_headerMenu->addSeparator();
-
-        showAction = new QAction(headerItem()->text(i), m_headerMenu);
+    for(int i = 0; i < numColumns; ++i) {
+        showAction = new QAction(allColHeaders[i], m_headerMenu);
         showAction->setData(i);
         showAction->setCheckable(true);
         showAction->setChecked(sharedSettings->isColumnVisible(i));
@@ -1237,8 +1262,6 @@ void Playlist::slotInitialize()
 
     connect(this, SIGNAL(customContextMenuRequested(QPoint)),
             this, SLOT(slotShowRMBMenu(QPoint)));
-    connect(this, SIGNAL(itemDoubleClicked(QTreeWidgetItem*,int)),
-            this, SLOT(slotPlayCurrent()));
 
     // Disabled for now because adding new items (File->Open) causes Qt to send
     // an itemChanged signal for unrelated playlist items which can cause the
@@ -1265,6 +1288,9 @@ void Playlist::slotInitialize()
     setDropIndicatorShown(true);
     setDragEnabled(true);
 
+    // TODO: Retain last-run's sort
+    sortByColumn(1, Qt::AscendingOrder);
+
     m_disableColumnWidthUpdates = false;
 }
 
@@ -1273,8 +1299,9 @@ void Playlist::setupItem(PlaylistItem *item)
     item->setTrackId(g_trackID);
     g_trackID++;
 
-    if(!m_search.isEmpty())
-        item->setHidden(!m_search.checkItem(item));
+    QModelIndex index = indexFromItem(item);
+    if(!m_search->isEmpty())
+        item->setHidden(!m_search->checkItem(&index));
 
     if(topLevelItemCount() <= 2 && !manualResize()) {
         slotWeightDirty();
@@ -1348,8 +1375,10 @@ void Playlist::slotPlayFromBackMenu(QAction *backAction) const
 // private members
 ////////////////////////////////////////////////////////////////////////////////
 
-void Playlist::setup()
+void Playlist::setup(int numColumnsToReserve)
 {
+    m_search = new PlaylistSearch(this);
+
     setAlternatingRowColors(true);
     setRootIsDecorated(false);
     setContextMenuPolicy(Qt::CustomContextMenu);
@@ -1364,9 +1393,6 @@ void Playlist::setup()
     // progress.
     connect(this, SIGNAL(itemSelectionChanged()), m_fetcher, SLOT(abortSearch()));
 
-    sortByColumn(1, Qt::AscendingOrder);
-
-    // Should this be itemActivated? It is quite annoying when I try it...
     connect(this, &QTreeWidget::itemDoubleClicked, this, &Playlist::slotPlayCurrent);
 
     // Use a timer to soak up the multiple dataChanged signals we're going to get
@@ -1391,7 +1417,7 @@ void Playlist::setup()
 
     // Explicitly call slotInitialize() so that the columns are added before
     // SharedSettings::apply() sets the visible and hidden ones.
-    slotInitialize();
+    slotInitialize(numColumnsToReserve);
 }
 
 void Playlist::loadFile(const QString &fileName, const QFileInfo &fileInfo)
@@ -1943,8 +1969,8 @@ void Playlist::slotInlineEditDone(QTreeWidgetItem *item, int column)
         return;
     }
 
-    for(auto &item : l) {
-        editTag(item, text, column);
+    for(auto &selItem : l) {
+        editTag(selItem, text, column);
     }
 
     TagTransactionManager::instance()->commit();
@@ -2013,11 +2039,6 @@ void Playlist::columnResized(int column, int, int newSize)
 {
     m_widthsDirty = true;
     m_columnFixedWidths[column] = newSize;
-}
-
-void Playlist::slotInlineCompletionModeChanged(KCompletion::CompletionMode mode)
-{
-    SharedSettings::instance()->setInlineCompletionMode(mode);
 }
 
 void Playlist::slotPlayCurrent()

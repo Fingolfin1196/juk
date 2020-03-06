@@ -28,22 +28,22 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 SearchPlaylist::SearchPlaylist(PlaylistCollection *collection,
-                               const PlaylistSearch &search,
+                               PlaylistSearch& search,
                                const QString &name,
                                bool setupPlaylist,
                                bool synchronizePlaying) :
     DynamicPlaylist(search.playlists(), collection, name, "edit-find",
                     setupPlaylist, synchronizePlaying),
-    m_search(search)
+    m_search(&search)
 {
 
 }
 
-void SearchPlaylist::setPlaylistSearch(const PlaylistSearch &s, bool update)
+void SearchPlaylist::setPlaylistSearch(PlaylistSearch* s, bool update)
 {
     m_search = s;
     if(update)
-        setPlaylists(s.playlists());
+        setPlaylists(s->playlists());
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -55,12 +55,14 @@ void SearchPlaylist::updateItems()
     // Here we don't simply use "clear" since that would involve a call to
     // items() which would in turn call this method...
 
-    m_search.search();
-    synchronizeItemsTo(m_search.matchedItems());
+    PlaylistItemList items;
+    for(const QModelIndex index: m_search->matchedItems())
+        items.push_back(static_cast<PlaylistItem*>(itemFromIndex(index)));
+    synchronizeItemsTo(items);
 
     if(synchronizePlaying()) {
         qCDebug(JUK_LOG) << "synchronizing playing";
-        synchronizePlayingItems(m_search.playlists(), true);
+        synchronizePlayingItems(m_search->playlists(), true);
     }
 }
 
@@ -80,10 +82,10 @@ QDataStream &operator<<(QDataStream &s, const SearchPlaylist &p)
 QDataStream &operator>>(QDataStream &s, SearchPlaylist &p)
 {
     QString name;
-    PlaylistSearch search;
+    auto search = new PlaylistSearch(&p);
 
     s >> name
-      >> search;
+      >> *search;
 
     if(name.isEmpty())
         throw BICStreamException();

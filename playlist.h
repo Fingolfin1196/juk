@@ -18,8 +18,6 @@
 #ifndef JUK_PLAYLIST_H
 #define JUK_PLAYLIST_H
 
-#include <KCompletion>
-
 #include <QVector>
 #include <QEvent>
 #include <QList>
@@ -256,18 +254,18 @@ public:
      * Sets the items in the list to be either visible based on the value of
      * visible.  This is useful for search operations and such.
      */
-    static void setItemsVisible(const PlaylistItemList &items, bool visible = true);
+    void setItemsVisible(const QModelIndexList &indexes, bool visible = true);
 
     /**
      * Returns the search associated with this list, or an empty search if one
      * has not yet been set.
      */
-    PlaylistSearch search() const { return m_search; }
+    PlaylistSearch* search() const { return m_search; }
 
     /**
      * Set the search associated with this playlist.
      */
-    void setSearch(const PlaylistSearch &s);
+    void setSearch(PlaylistSearch* s);
 
     /**
      * If the search is disabled then all items will be shown, not just those that
@@ -300,6 +298,13 @@ public:
      * editable.
      */
     virtual bool searchIsEditable() const { return false; }
+
+    /**
+     * Synchronizes the playing item in this playlist with the playing item
+     * in \a playlist.  If \a setMaster is true, this list will become the source
+     * for determining the next item.
+     */
+    void synchronizePlayingItems(Playlist *playlist, bool setMaster);
 
     /**
      * Synchronizes the playing item in this playlist with the playing item
@@ -440,8 +445,6 @@ protected:
 
     virtual bool hasItem(const QString &file) const { return m_members.contains(file); }
 
-    virtual void addColumn(const QString &label, int width = -1);
-
     /**
      * Do some final initialization of created items.  Notably ensure that they
      * are shown or hidden based on the contents of the current PlaylistSearch.
@@ -499,7 +502,7 @@ private:
             PlaylistCollection *collection, const QString &iconName,
             int extraCols);
 
-    void setup();
+    void setup(int numColumnsToReserve);
 
     /**
      * This function is called to let the user know that JuK has automatically enabled
@@ -591,7 +594,7 @@ private slots:
      * Used to be a subclass of K3ListView::polish() but the timing of the
      * call is not consistent and therefore lead to crashes.
      */
-    void slotInitialize();
+    void slotInitialize(int numColumnsToReserve);
 
     void slotUpdateColumnWidths();
 
@@ -640,14 +643,6 @@ private slots:
      */
     void columnResized(int column, int oldSize, int newSize);
 
-    /**
-     * The slot is called when the completion mode for the line edit in the
-     * inline tag editor is changed.  It saves the settings and through the
-     * magic of the SharedSettings class will apply it to the other playlists as
-     * well.
-     */
-    void slotInlineCompletionModeChanged(KCompletion::CompletionMode mode);
-
     void slotPlayCurrent();
     void slotUpdateTime();
 
@@ -668,7 +663,6 @@ private:
     /**
      * The average minimum widths of columns to be used in balancing calculations.
      */
-    QStringList m_columns;
     QVector<int> m_columnWeights;
     QVector<int> m_columnFixedWidths;
     QVector<int> m_weightDirty;
@@ -678,7 +672,7 @@ private:
     bool m_widthsDirty                 = true;
     bool m_applySharedSettings         = true;
 
-    PlaylistSearch m_search;
+    PlaylistSearch* m_search;
     bool m_searchEnabled = true;
 
     int  m_itemsLoading = 0; /// Count of pending file loads outstanding

@@ -55,6 +55,7 @@ protected:
 signals:
     void signalQueryChanged();
     void signalDownPressed();
+    void returnPressed();
 
 private slots:
     void slotActivate();
@@ -74,8 +75,8 @@ class SearchWidget : public SearchLine
 public:
     explicit SearchWidget(QWidget *parent);
 
-    PlaylistSearch search(const PlaylistList &playlists) const;
-    void setSearch(const PlaylistSearch &search);
+    PlaylistSearch* search(const PlaylistList& playlists) const;
+    void setSearch(const PlaylistSearch* search);
 
     virtual QString searchText() const;
     virtual void setSearchText(const QString &text);
@@ -88,9 +89,6 @@ signals:
     // Minimizing/closing the JuK window will not trigger this signal.
 
     void signalShown(bool shown);
-
-private:
-    QStringList m_columnHeaders;
 };
 
 #endif

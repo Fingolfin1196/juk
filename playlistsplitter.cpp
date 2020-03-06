@@ -77,6 +77,8 @@ PlaylistSplitter::~PlaylistSplitter()
 {
     saveConfig();
 
+    m_playlistBox->stop(); // Remove playing item U/I state
+
     // TagEditor needs to write its configuration out while it's still valid,
     // destroy it now.
 
@@ -297,8 +299,7 @@ void PlaylistSplitter::slotShowSearchResults()
 {
     PlaylistList playlists;
     playlists.append(visiblePlaylist());
-    PlaylistSearch search = m_searchWidget->search(playlists);
-    visiblePlaylist()->setSearch(search);
+    visiblePlaylist()->setSearch(m_searchWidget->search(playlists));
 }
 
 void PlaylistSplitter::slotPlaylistSelectionChanged()

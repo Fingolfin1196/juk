@@ -38,9 +38,10 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 AdvancedSearchDialog::AdvancedSearchDialog(const QString &defaultName,
-                                           const PlaylistSearch &defaultSearch,
+                                           PlaylistSearch &defaultSearch,
                                            QWidget *parent) :
-    QDialog(parent)
+    QDialog(parent),
+    m_search(&defaultSearch)
 {
     setWindowTitle(i18n("Create Search Playlist"));
     setObjectName(QStringLiteral("juk_advSrchDlg"));
@@ -133,16 +134,16 @@ AdvancedSearchDialog::AdvancedSearchDialog(const QString &defaultName,
 
 void AdvancedSearchDialog::accept()
 {
-    m_search.clearPlaylists();
-    m_search.clearComponents();
+    m_search->clearPlaylists();
+    m_search->clearComponents();
 
-    m_search.addPlaylist(CollectionList::instance());
+    m_search->addPlaylist(CollectionList::instance());
 
     for(const auto &searchLine : m_searchLines)
-        m_search.addComponent(searchLine->searchComponent());
+        m_search->addComponent(searchLine->searchComponent());
 
     PlaylistSearch::SearchMode m = PlaylistSearch::SearchMode(!m_matchAnyButton->isChecked());
-    m_search.setSearchMode(m);
+    m_search->setSearchMode(m);
 
     m_playlistName = m_playlistNameLineEdit->text();
 
